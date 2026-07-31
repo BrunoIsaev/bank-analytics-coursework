@@ -1,0 +1,4 @@
+id,state,date,operationAmount,description
+1,EXECUTED,2023-01-01,1000,Перевод
+2,CANCELLED,2023-01-02,2000,Оплата
+3,EXECUTED,2023-01-03,3000,Пополнение
