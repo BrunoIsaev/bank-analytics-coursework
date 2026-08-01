@@ -1,118 +1,150 @@
-"""Модуль для генерации JSON-ответов веб-страниц."""
+"""Модуль представлений для генерации данных главной страницы."""
 
-import json
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-
+import logging
 import pandas as pd
-import requests
+from datetime import datetime, date
+from typing import Dict, Any, List
 
-from src.utils import load_user_settings, get_greeting
+logger = logging.getLogger(__name__)
 
 
-def get_currency_rates(currencies: List[str]) -> List[Dict[str, float]]:
-    """Получает курсы валют через API ЦБ РФ.
-
+def filter_current_month(df: pd.DataFrame) -> pd.DataFrame:
+    """Фильтрует транзакции за текущий месяц (с 1-го числа по сегодня).
+    
     Args:
-        currencies: Список кодов валют (например, ["USD", "EUR"]).
-
+        df: DataFrame со всеми транзакциями.
+        
     Returns:
-        Список словарей с ключами 'currency' и 'rate'.
+        Отфильтрованный DataFrame.
     """
-    rates = []
-    try:
-        # Используем открытый API ЦБ РФ
-        response = requests.get(
-            "https://www.cbr-xml-daily.ru/daily_json.js", timeout=10
-        )
-        data = response.json()
-        for curr in currencies:
-            if curr in data["Valute"]:
-                rates.append({
-                    "currency": curr,
-                    "rate": data["Valute"][curr]["Value"]
-                })
-    except Exception as e:
-        print(f"Ошибка получения курсов валют: {e}")
-    return rates
+    if df.empty or "Дата операции" not in df.columns:
+        logger.warning("DataFrame пуст или отсутствует колонка дат")
+        return df
+        
+    today = pd.Timestamp.now()
+    start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    # Фильтруем: дата >= начала месяца И дата <= сегодня
+    mask = (df["Дата операции"] >= start_of_month) & (df["Дата операции"] <= today)
+    filtered_df = df[mask].copy()
+    
+    logger.info(f"Отфильтровано {len(filtered_df)} транзакций за текущий месяц")
+    return filtered_df
 
 
-def get_stock_prices(stocks: List[str]) -> List[Dict[str, float]]:
-    """Получает цены акций через API Yahoo Finance (альтернатива).
-
+def process_cards(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Группирует транзакции по картам и считает суммы/количество.
+    
     Args:
-        stocks: Список тикеров акций (например, ["AAPL", "TSLA"]).
-
+        df: DataFrame с транзакциями за текущий месяц.
+        
     Returns:
-        Список словарей с ключами 'stock' и 'price'.
+        Список словарей с информацией по каждой карте.
     """
-    prices = []
-    # Для простоты используем mock-данные, так как бесплатные API акций часто требуют ключей
-    # В реальном проекте здесь был бы запрос к Alpha Vantage или Yahoo Finance
-    mock_prices = {
-        "AAPL": 150.12, "AMZN": 3173.18, "GOOGL": 2742.39,
-        "MSFT": 296.71, "TSLA": 1007.08
-    }
-    for stock in stocks:
-        price = mock_prices.get(stock, 0.0)
-        if price > 0:
-            prices.append({"stock": stock, "price": price})
-    return prices
-
-
-def get_main_page_data(
-    date_str: str, transactions_df: pd.DataFrame
-) -> Dict[str, Any]:
-    """Генерирует JSON-ответ для главной страницы.
-
-    Args:
-        date_str: Дата и время в формате 'YYYY-MM-DD HH:MM:SS'.
-        transactions_df: DataFrame с транзакциями.
-
-    Returns:
-        Словарь с данными для главной страницы.
-    """
-    # 1. Приветствие
-    greeting = get_greeting(date_str)
-
-    # 2. Данные по картам (группируем по номеру карты)
+    if df.empty or "Карта" not in df.columns:
+        return []
+        
     cards_data = []
-    if "Номер карты" in transactions_df.columns and "Сумма операции" in transactions_df.columns:
-        grouped = transactions_df.groupby("Номер карты")
-        for card_num, group in grouped:
-            total_spent = abs(group["Сумма операции"].sum())
-            cashback = round(total_spent * 0.01, 2)  # 1% кешбэк
-            last_digits = str(card_num)[-4:] if len(str(card_num)) >= 4 else str(card_num)
-            cards_data.append({
-                "last_digits": last_digits,
-                "total_spent": round(total_spent, 2),
-                "cashback": cashback
-            })
+    grouped = df.groupby("Карта")
+    
+    for card_name, group in grouped:
+        total_spent = group["Сумма"].sum()
+        count = len(group)
+        cards_data.append({
+            "card": str(card_name),
+            "total_spent": round(total_spent, 2),
+            "transactions_count": count
+        })
+        
+    logger.info(f"Обработано {len(cards_data)} карт")
+    return sorted(cards_data, key=lambda x: x["total_spent"], reverse=True)
 
-    # 3. Топ-5 транзакций по сумме платежа
-    top_transactions = []
-    if "Сумма платежа" in transactions_df.columns:
-        sorted_df = transactions_df.sort_values(
-            by="Сумма платежа", ascending=False
-        ).head(5)
-        for _, row in sorted_df.iterrows():
-            date_fmt = row["Дата операции"].strftime("%d.%m.%Y") if pd.notna(row["Дата операции"]) else ""
-            top_transactions.append({
-                "date": date_fmt,
-                "amount": round(float(row["Сумма платежа"]), 2),
-                "category": row.get("Категория", ""),
-                "description": row.get("Описание", "")
-            })
 
-    # 4. Курсы валют и акции из настроек
-    settings = load_user_settings()
-    currency_rates = get_currency_rates(settings.get("user_currencies", []))
-    stock_prices = get_stock_prices(settings.get("user_stocks", []))
+def process_top_transactions(df: pd.DataFrame, top_n: int = 5) -> List[Dict[str, Any]]:
+    """Формирует топ-N самых дорогих транзакций.
+    
+    Args:
+        df: DataFrame с транзакциями за текущий месяц.
+        top_n: Количество транзакций в топе.
+        
+    Returns:
+        Список словарей с топ-транзакциями.
+    """
+    if df.empty:
+        return []
+        
+    # Сортируем по сумме убыванию и берем первые N
+    top_df = df.nlargest(top_n, "Сумма")
+    
+    result = []
+    for _, row in top_df.iterrows():
+        result.append({
+            "date": row["Дата операции"].strftime("%d.%m.%Y"),
+            "description": row.get("Описание", "Без описания"),
+            "amount": round(row["Сумма"], 2),
+            "category": row.get("Категория", "Прочее")
+        })
+        
+    logger.info(f"Сформирован топ-{top_n} транзакций")
+    return result
 
-    return {
-        "greeting": greeting,
-        "cards": cards_data,
+
+def get_stock_prices() -> List[Dict[str, Any]]:
+    """Возвращает котировки акций (заглушка/Mock).
+    
+    Поскольку реальное API может быть недоступно или требовать ключ,
+    используем статические данные для демонстрации функционала.
+    
+    Returns:
+        Список словарей с котировками.
+    """
+    logger.info("Получение котировок акций (используется заглушка)")
+    
+    # Статические данные вместо реального API запроса
+    mock_stocks = [
+        {"ticker": "SBER", "price": 285.40, "change": 1.2},
+        {"ticker": "GAZP", "price": 168.90, "change": -0.5},
+        {"ticker": "LKOH", "price": 7250.00, "change": 0.8},
+        {"ticker": "YNDX", "price": 3450.50, "change": 2.1}
+    ]
+    
+    return mock_stocks
+
+
+def get_main_page_data(transactions_df: pd.DataFrame) -> Dict[str, Any]:
+    """Собирает все данные для отображения на главной странице.
+    
+    Args:
+        transactions_df: DataFrame со ВСЕМИ транзакциями (неотфильтрованными).
+        
+    Returns:
+        Словарь с данными для фронтенда/вывода.
+    """
+    logger.info("Начало сборки данных для главной страницы")
+    
+    # 1. Сначала фильтруем по текущему месяцу
+    current_month_df = filter_current_month(transactions_df)
+    
+    # 2. Обрабатываем карты
+    cards = process_cards(current_month_df)
+    
+    # 3. Формируем топ трат
+    top_transactions = process_top_transactions(current_month_df)
+    
+    # 4. Получаем котировки (заглушка)
+    stocks = get_stock_prices()
+    
+    # 5. Считаем общую статистику за месяц
+    total_spent = current_month_df["Сумма"].sum() if not current_month_df.empty else 0
+    
+    data = {
+        "greeting": "Добро пожаловать в аналитику!",
+        "period": "Текущий месяц",
+        "total_spent": round(total_spent, 2),
+        "cards": cards,
         "top_transactions": top_transactions,
-        "currency_rates": currency_rates,
-        "stock_prices": stock_prices
+        "stocks": stocks
     }
+    
+    logger.info("Данные для главной страницы успешно собраны")
+    return data

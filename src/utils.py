@@ -1,78 +1,92 @@
-"""Модуль с утилитами для работы с данными транзакций."""
+"""Модуль с утилитами для курсовой работы."""
 
+import os
 import json
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-
+import logging
 import pandas as pd
+from datetime import datetime
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("logs/coursework.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
-def load_transactions(filepath: str) -> pd.DataFrame:
-    """Загружает транзакции из Excel-файла в DataFrame.
-
+def load_transactions(filepath: str = None) -> pd.DataFrame:
+    """Загружает транзакции из Excel-файла.
+    
     Args:
-        filepath: Путь к Excel-файлу с транзакциями.
-
+        filepath: Путь к файлу operations.xlsx. 
+                  По умолчанию: ../data/operations.xlsx
+        
     Returns:
-        DataFrame с данными транзакций.
+        DataFrame с транзакциями.
     """
+    if filepath is None:
+        # Используем относительный путь от src/ к data/
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        filepath = os.path.join(project_root, "data", "operations.xlsx")
+    
+    logger.info(f"Загрузка транзакций из файла: {filepath}")
+    
     try:
         df = pd.read_excel(filepath)
-        # Приводим даты к формату datetime
+        logger.info(f"Успешно загружено {len(df)} транзакций")
+        
+        # Исправляем парсинг дат: убираем жесткий формат, используем dayfirst
         if "Дата операции" in df.columns:
-            df["Дата операции"] = pd.to_datetime(df["Дата операции"], format="%d.%m.%Y")
+            df["Дата операции"] = pd.to_datetime(df["Дата операции"], dayfirst=True)
+            logger.info("Даты успешно распарсены")
+            
         return df
-    except FileNotFoundError:
-        print(f"Файл не найден: {filepath}")
-        return pd.DataFrame()
     except Exception as e:
-        print(f"Ошибка при чтении файла {filepath}: {e}")
-        return pd.DataFrame()
+        logger.error(f"Ошибка при загрузке транзакций: {e}")
+        raise
 
 
-def get_greeting(date_str: Optional[str] = None) -> str:
-    """Возвращает приветствие в зависимости от времени суток.
-
+def load_user_settings(filepath: str = None) -> dict:
+    """Загружает настройки пользователя из JSON-файла.
+    
     Args:
-        date_str: Строка с датой и временем в формате 'YYYY-MM-DD HH:MM:SS'.
-                  Если None, используется текущее время.
-
+        filepath: Путь к файлу user_settings.json.
+                  По умолчанию: ../user_settings.json
+        
     Returns:
-        Строка приветствия: 'Доброе утро', 'Добрый день', 'Добрый вечер', 'Доброй ночи'.
+        Словарь с настройками.
     """
-    if date_str:
-        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-    else:
-        dt = datetime.now()
-
-    hour = dt.hour
-
-    if 6 <= hour < 12:
-        return "Доброе утро"
-    elif 12 <= hour < 18:
-        return "Добрый день"
-    elif 18 <= hour < 23:
-        return "Добрый вечер"
-    else:
-        return "Доброй ночи"
-
-
-def load_user_settings(filepath: str = "user_settings.json") -> Dict[str, Any]:
-    """Загружает пользовательские настройки из JSON-файла.
-
-    Args:
-        filepath: Путь к файлу настроек.
-
-    Returns:
-        Словарь с настройками (валюты, акции).
-    """
+    if filepath is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        filepath = os.path.join(project_root, "user_settings.json")
+    
+    logger.info(f"Загрузка настроек пользователя из: {filepath}")
+    
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, 'r', encoding='utf-8') as f:
             settings = json.load(f)
+        logger.info("Настройки пользователя успешно загружены")
         return settings
-    except FileNotFoundError:
-        print(f"Файл настроек не найден: {filepath}")
-        return {"user_currencies": [], "user_stocks": []}
-    except json.JSONDecodeError:
-        print(f"Ошибка чтения JSON в файле {filepath}")
-        return {"user_currencies": [], "user_stocks": []}
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке настроек: {e}")
+        # Возвращаем дефолтные настройки, чтобы программа не падала
+        return {"currency": "RUB", "language": "ru"}
+
+
+def get_greeting() -> str:
+    """Возвращает приветствие в зависимости от времени суток."""
+    hour = datetime.now().hour
+    if 6 <= hour < 12:
+        return "Доброе утро!"
+    elif 12 <= hour < 18:
+        return "Добрый день!"
+    elif 18 <= hour < 23:
+        return "Добрый вечер!"
+    else:
+        return "Доброй ночи!"
