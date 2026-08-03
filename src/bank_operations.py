@@ -2,7 +2,7 @@
 
 import re
 from collections import Counter
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 
 def process_bank_search(
@@ -41,8 +41,6 @@ def process_bank_operations(
         Словарь, где ключи — названия категорий,
         значения — количество операций.
     """
-    descriptions = [
-        item.get("description", "") for item in data
-    ]
+    descriptions = [item.get("description", "") for item in data]
     counter = Counter(descriptions)
     return {cat: counter.get(cat, 0) for cat in categories}
